@@ -526,9 +526,6 @@ function onVehicleChange() {
     info.classList.add('show');
 }
 
-// ─────────────────────────────────────────────
-// Max/Min 그룹 레이블 함수 (중복값 처리 포함)
-// ─────────────────────────────────────────────
 function getGroupLabel(val, A, B, C, D) {
     const groups = [['A', A], ['B', B], ['C', C], ['D', D]];
     const matches = groups.filter(([, v]) => v === val).map(([k]) => k);
@@ -565,18 +562,13 @@ function runCalculate() {
     }
     errEl.classList.remove('show');
 
-    // ─────────────────────────────────────────
-    // [버그 수정] 뒷케빈 180도 크로스 스와핑
-    // 앞케빈 기준: A=좌앞, B=우앞, C=우뒤, D=좌뒤
-    // 뒷케빈 입력: A=우뒤(→앞기준 C), B=좌뒤(→앞기준 D), C=좌앞(→앞기준 A), D=우앞(→앞기준 B)
-    // 따라서 올바른 스왑: A→C, B→D, C→A, D→B
-    // ─────────────────────────────────────────
+    // 뒷케빈 크로스 모드 스와핑
     if (currentCabinMode === 'rear') {
         const tempA = A, tempB = B, tempC = C, tempD = D;
         A = tempC; B = tempD; C = tempA; D = tempB;
     }
 
-    // [4점 지지 모드] 각 독립 밸브 라인 연산
+    // 4점 지지 그룹 연산
     const leftSum = A + D;
     const rightSum = B + C;
     const frontSum = A + B;
@@ -584,35 +576,28 @@ function runCalculate() {
     const total = A + B + C + D;
 
     // ─────────────────────────────────────────────────────
-    // 중앙(50%) 기준 편차율 — TP 모니터와 동일한 방식
-    // 양수 = 우측/뒤쪽으로 치우침, 음수 = 좌측/앞쪽으로 치우침
-    // 허용: 좌우 ±10%, 앞뒤 ±20%
+    // [버그 수정 완료] 상대 비율 편차 산출식으로 변경 (실제값의 1/2로 계산되던 현상 해결)
     // ─────────────────────────────────────────────────────
-    const xRatio = total > 0 ? rightSum / total : 0.5;
-    const yRatio = total > 0 ? rearSum / total : 0.5;
+    const lrDevSigned = total > 0 ? ((rightSum - leftSum) / total) * 100 : 0; // + = 우측 치우침, - = 좌측 치우침
+    const frDevSigned = total > 0 ? ((frontSum - rearSum) / total) * 100 : 0; // + = 앞쪽 치우침, - = 뒤쪽 치우침
 
-    // 부호 있는 편차 (중앙 기준)
-    const lrDevSigned = (xRatio - 0.5) * 100; // + = 우측, - = 좌측
-    const frDevSigned = (0.5 - yRatio) * 100; // + = 앞쪽, - = 뒤쪽
-
-    // 절대값 (판정용)
     const lrDev = Math.abs(lrDevSigned);
     const frDev = Math.abs(frDevSigned);
 
     const maxP = Math.max(A, B, C, D);
     const minP = Math.min(A, B, C, D);
 
-    // ─────────────────────────────────────────────────────
-    // 이동거리: 편차 비율 × 차량 폭/길이 (단위: m → cm 변환)
-    // 우측/뒤로 치우쳤으면 좌측/앞으로 블록 이동 필요
-    // ─────────────────────────────────────────────────────
-    const lrOffset = lrDevSigned / 100 * vehicleWid; // m 단위
-    const frOffset = frDevSigned / 100 * vehicleLen; // m 단위
+    // 이동 가이드 거리 계산 (편차율을 반영한 무게중심 이격 거리 매핑)
+    // CoG 이격 수치 공식 보정 : 편차율 수치 변화에 맞춰 실제 축간거리 대비 오프셋 동기화
+    const lrOffset = (lrDevSigned / 2) / 100 * vehicleWid;
+    const frOffset = (frDevSigned / 2) / 100 * vehicleLen;
 
-    // UI 모니터 맵 도트 좌표 바인딩
-    // 스왑으로 이미 앞케빈 기준으로 통일됐으므로 모드 무관하게 동일 처리
+    // 모니터 화면상의 CoG 도트 좌표 바인딩 (50%가 중앙 센터)
+    const xRatio = 0.5 + (lrDevSigned / 2 / 100);
+    const yRatio = 0.5 - (frDevSigned / 2 / 100);
     const xPct = Math.min(90, Math.max(10, xRatio * 100));
     const yPct = Math.min(90, Math.max(10, yRatio * 100));
+    
     const dot = document.getElementById('cogDot');
     dot.style.left = xPct + '%';
     dot.style.top = yPct + '%';
@@ -620,9 +605,9 @@ function runCalculate() {
     const isSafe = lrDev <= 10 && frDev <= 20;
     dot.className = 'cog-dot' + (isSafe ? ' safe' : '');
 
-    // 텍스트 방향 매핑 (부호 기반) - 스왑 후 앞케빈 기준으로 통일
-    const xDir = lrDevSigned > 2 ? '우측' : lrDevSigned < -2 ? '좌측' : '중앙';
-    const yDir = frDevSigned > 2 ? '앞쪽' : frDevSigned < -2 ? '뒤쪽' : '중앙';
+    // 중심 상태 디스크립션 텍스트 출력
+    const xDir = lrDevSigned > 1 ? '우측' : lrDevSigned < -1 ? '좌측' : '중앙';
+    const yDir = frDevSigned > 1 ? '앞쪽' : frDevSigned < -1 ? '뒤쪽' : '중앙';
 
     document.getElementById('cogDesc').textContent =
         (xDir === '중앙' && yDir === '중앙')
@@ -632,12 +617,10 @@ function runCalculate() {
     const lrEl = document.getElementById('moveLR');
     const frEl = document.getElementById('moveFR');
 
-    // 좌/우 얼라인먼트 가이드
-    if (lrDev < 2) {
+    // 좌/우 진입 가이드 수정
+    if (lrDev < 1) {
         lrEl.innerHTML = `<span class="move-arrow">↔</span><div class="move-text"><div class="move-ok">✅ 좌/우 밸런스 완벽</div></div>`;
     } else {
-        // lrOffset 양수 = 실제 우측으로 치우침 = 트랜스포터를 실제 우측으로 이동
-        // 뒷케빈에서 실제 우측은 운전자 시야의 좌측
         const realDir = lrOffset > 0 ? '우측' : '좌측';
         const viewDir = currentCabinMode === 'rear'
             ? (lrOffset > 0 ? '좌측(실제 우측)' : '우측(실제 좌측)')
@@ -653,12 +636,10 @@ function runCalculate() {
             </div>`;
     }
 
-    // 앞/뒤 얼라인먼트 가이드
-    if (frDev < 2) {
+    // 앞/뒤 진입 가이드 수정
+    if (frDev < 1) {
         frEl.innerHTML = `<span class="move-arrow">↕</span><div class="move-text"><div class="move-ok">✅ 앞/뒤 밸런스 완벽</div></div>`;
     } else {
-        // frOffset 양수 = 실제 앞쪽으로 치우침 = 트랜스포터를 실제 앞쪽으로 이동
-        // 뒷케빈에서 실제 앞쪽은 운전자 시야의 뒤쪽
         const realDir = frOffset > 0 ? '앞쪽' : '뒤쪽';
         const viewDir = currentCabinMode === 'rear'
             ? (frOffset > 0 ? '뒤쪽(실제 앞쪽)' : '앞쪽(실제 뒤쪽)')
@@ -674,14 +655,14 @@ function runCalculate() {
             </div>`;
     }
 
-    // 편차 결과 출력
+    // 결과 뷰 매핑
     document.getElementById('lrVal').textContent = (lrDevSigned > 0 ? '+' : '') + lrDevSigned.toFixed(2) + '%';
     const lrSafe = lrDev <= 10;
     const lrSt = document.getElementById('lrStatus');
     lrSt.textContent = lrSafe ? '안전 · 작업가능' : '위험 · 작업불가';
     lrSt.className = 'dev-status ' + (lrSafe ? 'safe' : 'danger');
     document.getElementById('lrDetail').textContent =
-        `좌측 합계(A+D): ${leftSum.toFixed(0)} bar (${(leftSum/total*100).toFixed(1)}%)\n우측 합계(B+C): ${rightSum.toFixed(0)} bar (${(rightSum/total*100).toFixed(1)}%)\n중앙(50%) 대비 편차: ${lrDevSigned > 0 ? '+' : ''}${lrDevSigned.toFixed(1)}%`;
+        `좌측 합계(A+D): ${leftSum.toFixed(0)} bar (${(leftSum/total*100).toFixed(1)}%)\n우측 합계(B+C): ${rightSum.toFixed(0)} bar (${(rightSum/total*100).toFixed(1)}%)\n양측간 편차율: ${lrDevSigned > 0 ? '+' : ''}${lrDevSigned.toFixed(1)}%`;
 
     document.getElementById('frVal').textContent = (frDevSigned > 0 ? '+' : '') + frDevSigned.toFixed(2) + '%';
     const frSafe = frDev <= 20;
@@ -689,11 +670,8 @@ function runCalculate() {
     frSt.textContent = frSafe ? '안전 · 작업가능' : '위험 · 작업불가';
     frSt.className = 'dev-status ' + (frSafe ? 'safe' : 'danger');
     document.getElementById('frDetail').textContent =
-        `앞쪽 합계(A+B): ${frontSum.toFixed(0)} bar (${(frontSum/total*100).toFixed(1)}%)\n뒤쪽 합계(D+C): ${rearSum.toFixed(0)} bar (${(rearSum/total*100).toFixed(1)}%)\n중앙(50%) 대비 편차: ${frDevSigned > 0 ? '+' : ''}${frDevSigned.toFixed(1)}%`;
+        `앞쪽 합계(A+B): ${frontSum.toFixed(0)} bar (${(frontSum/total*100).toFixed(1)}%)\n뒤쪽 합계(D+C): ${rearSum.toFixed(0)} bar (${(rearSum/total*100).toFixed(1)}%)\n양측간 편차율: ${frDevSigned > 0 ? '+' : ''}${frDevSigned.toFixed(1)}%`;
 
-    // ─────────────────────────────────────────
-    // [버그 수정] Max/Min 그룹 표시 - 중복값 모두 표시
-    // ─────────────────────────────────────────
     const maxLabel = getGroupLabel(maxP, A, B, C, D);
     const minLabel = getGroupLabel(minP, A, B, C, D);
 
